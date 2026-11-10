@@ -3,11 +3,13 @@ import { DashboardComponent } from './dashboard/dashboard.component';
 import { ImportComponent } from './import/import.component';
 import { TransactionsComponent } from './transactions/transactions.component';
 import { CategoriesComponent } from './categories/categories.component';
+import { InvoicesComponent } from './invoices/invoices.component';
 
 export const routes: Routes = [
   { path: '', pathMatch: 'full', redirectTo: 'dashboard' },
   { path: 'dashboard', component: DashboardComponent },
   { path: 'transactions', component: TransactionsComponent },
+  { path: 'invoices', component: InvoicesComponent },
   { path: 'categories', component: CategoriesComponent },
   { path: 'import', component: ImportComponent },
 ];

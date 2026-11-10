@@ -105,6 +105,19 @@ export interface InvoiceTotal {
   expenses: number;
   payments: number;
   count: number;
+  paid: boolean;
+}
+
+export interface InstallmentItem {
+  establishment: string;
+  holder: string;
+  category?: string;
+  color?: string;
+  installment_total: number;
+  current: number;
+  remaining: number;
+  monthly_amount: number;
+  total_committed: number;
 }
 
 export interface Invoice {
@@ -115,6 +128,8 @@ export interface Invoice {
   person_id: number;
   source_id: number;
   transactions: number;
+  paid: boolean;
+  paid_at?: string;
 }
 
 export interface ImportResult {
@@ -258,5 +273,13 @@ export class ApiService {
 
   recurring(f: Filters): Observable<RecurringItem[]> {
     return this.http.get<RecurringItem[]>(`${this.base}/dashboard/recurring`, { params: this.params(f) });
+  }
+
+  installments(f: Filters): Observable<InstallmentItem[]> {
+    return this.http.get<InstallmentItem[]>(`${this.base}/dashboard/installments`, { params: this.params(f) });
+  }
+
+  setInvoicePaid(id: number, paid: boolean): Observable<{ id: number; paid: boolean }> {
+    return this.http.patch<{ id: number; paid: boolean }>(`${this.base}/invoices/${id}/paid`, { paid });
   }
 }

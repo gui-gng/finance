@@ -21,6 +21,12 @@ import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
           </svg>
           Transactions
         </a>
+        <a routerLink="/invoices" routerLinkActive="active">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><line x1="6" y1="15" x2="10" y2="15"/>
+          </svg>
+          Invoices
+        </a>
         <a routerLink="/categories" routerLinkActive="active">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
