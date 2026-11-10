@@ -1,0 +1,16 @@
+services:
+  backend:
+    build: ./backend
+    container_name: finance-backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://finance:finance@postgres:5432/finance?sslmode=disable
+      PORT: "8080"
+    ports:
+      - "8080:8080"
+    networks:
+      - finance-infra
+
+networks:
+  finance-infra:
+    external: true
