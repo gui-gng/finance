@@ -165,6 +165,8 @@ type Invoice struct {
 	PersonID      int     `json:"person_id"`
 	SourceID      int     `json:"source_id"`
 	Transactions  int     `json:"transactions"`
+	Paid          bool    `json:"paid"`
+	PaidAt        *string `json:"paid_at,omitempty"`
 }
 
 func (h *Handler) ListInvoices(w http.ResponseWriter, r *http.Request) {
@@ -189,7 +191,7 @@ func (h *Handler) ListInvoices(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.db.pool.Query(r.Context(),
-		fmt.Sprintf(`SELECT i.id, i.name, i.filename, i.reference_date, i.person_id, i.source_id, COUNT(t.id)
+		fmt.Sprintf(`SELECT i.id, i.name, i.filename, i.reference_date, i.person_id, i.source_id, COUNT(t.id), i.paid, i.paid_at
 		 FROM imports i
 		 LEFT JOIN transactions t ON t.import_id = i.id
 		 %s
@@ -204,8 +206,8 @@ func (h *Handler) ListInvoices(w http.ResponseWriter, r *http.Request) {
 	invoices := []Invoice{}
 	for rows.Next() {
 		var v Invoice
-		var ref *time.Time
-		if err := rows.Scan(&v.ID, &v.Name, &v.Filename, &ref, &v.PersonID, &v.SourceID, &v.Transactions); err != nil {
+		var ref, paidAt *time.Time
+		if err := rows.Scan(&v.ID, &v.Name, &v.Filename, &ref, &v.PersonID, &v.SourceID, &v.Transactions, &v.Paid, &paidAt); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -213,9 +215,46 @@ func (h *Handler) ListInvoices(w http.ResponseWriter, r *http.Request) {
 			s := ref.Format("2006-01-02")
 			v.ReferenceDate = &s
 		}
+		if paidAt != nil {
+			s := paidAt.Format("2006-01-02")
+			v.PaidAt = &s
+		}
 		invoices = append(invoices, v)
 	}
 	writeJSON(w, http.StatusOK, invoices)
+}
+
+// SetInvoicePaid marks an invoice as paid (or unpaid) and records when.
+func (h *Handler) SetInvoicePaid(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid invoice id")
+		return
+	}
+	var body struct {
+		Paid bool `json:"paid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+
+	paidAt := any(nil)
+	if body.Paid {
+		paidAt = time.Now()
+	}
+	var exists bool
+	err = h.db.pool.QueryRow(r.Context(),
+		"UPDATE imports SET paid = $1, paid_at = $2 WHERE id = $3 RETURNING TRUE", body.Paid, paidAt, id).Scan(&exists)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "invoice not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "paid": body.Paid})
 }
 
 type ImportResult struct {
@@ -645,6 +684,7 @@ type InvoiceTotal struct {
 	Expenses      float64 `json:"expenses"`
 	Payments      float64 `json:"payments"`
 	Count         int     `json:"count"`
+	Paid          bool    `json:"paid"`
 }
 
 func (h *Handler) DashboardInvoices(w http.ResponseWriter, r *http.Request) {
@@ -687,7 +727,7 @@ func (h *Handler) DashboardInvoices(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.db.pool.Query(r.Context(),
-		fmt.Sprintf(`SELECT i.id, i.filename, i.reference_date,
+		fmt.Sprintf(`SELECT i.id, i.filename, i.reference_date, i.paid,
 			COALESCE(SUM(t.amount) FILTER (WHERE t.amount > 0), 0),
 			COALESCE(-SUM(t.amount) FILTER (WHERE t.amount < 0), 0),
 			COUNT(t.id)
@@ -706,7 +746,7 @@ func (h *Handler) DashboardInvoices(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var v InvoiceTotal
 		var ref *time.Time
-		if err := rows.Scan(&v.ImportID, &v.Filename, &ref, &v.Expenses, &v.Payments, &v.Count); err != nil {
+		if err := rows.Scan(&v.ImportID, &v.Filename, &ref, &v.Paid, &v.Expenses, &v.Payments, &v.Count); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -715,6 +755,57 @@ func (h *Handler) DashboardInvoices(w http.ResponseWriter, r *http.Request) {
 			v.ReferenceDate = &s
 		}
 		items = append(items, v)
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+type InstallmentItem struct {
+	Establishment   string  `json:"establishment"`
+	Holder          string  `json:"holder"`
+	Category        *string `json:"category"`
+	Color           *string `json:"color"`
+	InstallmentMax  int     `json:"installment_total"`
+	Current         int     `json:"current"`
+	Remaining       int     `json:"remaining"`
+	MonthlyAmount   float64 `json:"monthly_amount"`
+	TotalCommitted  float64 `json:"total_committed"`
+}
+
+// DashboardInstallments lists installment purchases that are not yet fully
+// paid (installment_number < installment_total), grouped by establishment,
+// holder, total installments, and category.
+func (h *Handler) DashboardInstallments(w http.ResponseWriter, r *http.Request) {
+	where, args := h.filters(r)
+
+	rows, err := h.db.pool.Query(r.Context(),
+		fmt.Sprintf(`SELECT t.establishment, t.holder, c.name, c.color, t.installment_total,
+			MAX(t.installment_number),
+			COUNT(*),
+			AVG(t.amount),
+			SUM(t.amount) + (t.installment_total - MAX(t.installment_number)) * AVG(t.amount)
+		 FROM transactions t
+		 LEFT JOIN categories c ON c.id = t.category_id
+		 %s AND t.installment_total > 1 AND t.installment_number < t.installment_total AND t.amount > 0
+		 GROUP BY t.establishment, t.holder, c.name, c.color, t.installment_total
+		 ORDER BY AVG(t.amount) DESC`, where),
+		args...)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+
+	items := []InstallmentItem{}
+	for rows.Next() {
+		var it InstallmentItem
+		var count int
+		if err := rows.Scan(&it.Establishment, &it.Holder, &it.Category, &it.Color, &it.InstallmentMax,
+			&it.Current, &count, &it.MonthlyAmount, &it.TotalCommitted); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		it.Remaining = it.InstallmentMax - it.Current
+		items = append(items, it)
 	}
 	writeJSON(w, http.StatusOK, items)
 }

@@ -44,6 +44,7 @@ func main() {
 		r.Post("/sources", h.CreateSource)
 		r.Get("/holders", h.ListHolders)
 		r.Get("/invoices", h.ListInvoices)
+		r.Patch("/invoices/{id}/paid", h.SetInvoicePaid)
 		r.Get("/categories", h.ListCategories)
 		r.Post("/categories", h.CreateCategory)
 		r.Delete("/categories/{id}", h.DeleteCategory)
@@ -62,6 +63,7 @@ func main() {
 		r.Get("/dashboard/by-category", h.DashboardByCategory)
 		r.Get("/dashboard/budget-status", h.DashboardBudgetStatus)
 		r.Get("/dashboard/recurring", h.DashboardRecurring)
+		r.Get("/dashboard/installments", h.DashboardInstallments)
 	})
 
 	port := getenv("PORT", "8080")

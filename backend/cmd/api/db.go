@@ -67,6 +67,8 @@ CREATE INDEX IF NOT EXISTS idx_transactions_person ON transactions(person_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_source ON transactions(source_id);
 
 ALTER TABLE imports ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';
+ALTER TABLE imports ADD COLUMN IF NOT EXISTS paid BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE imports ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS uuid UUID;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_uuid ON transactions(uuid);
 CREATE INDEX IF NOT EXISTS idx_transactions_import ON transactions(import_id);
