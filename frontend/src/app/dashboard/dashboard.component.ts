@@ -1,5 +1,6 @@
 import { Component, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { BaseChartDirective } from 'ng2-charts';
 import { ChartConfiguration } from 'chart.js';
@@ -7,137 +8,230 @@ import { forkJoin } from 'rxjs';
 
 import {
   ApiService, BudgetStatus, CategorySpend, EstablishmentTotal, Filters, HolderTotal,
-  InvoiceTotal, MonthlyPoint, RecurringItem, Summary, WeekdayPoint,
+  Invoice, InvoiceTotal, MonthlyPoint, RecurringItem, Summary, WeekdayPoint,
 } from '../api.service';
 import { FiltersComponent } from '../filters/filters.component';
 
 const WEEKDAYS_PT = ['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom'];
+const LAYOUT_KEY = 'dashboard-layout';
+
+interface WidgetDef { id: string; label: string; }
+
+const DEFAULT_WIDGETS: WidgetDef[] = [
+  { id: 'stats', label: 'Key figures' },
+  { id: 'invoiceStatus', label: 'Invoice status' },
+  { id: 'budgets', label: 'Budgets' },
+  { id: 'monthly', label: 'Monthly flow' },
+  { id: 'categories', label: 'Spending by category' },
+  { id: 'holders', label: 'Expenses by holder' },
+  { id: 'invoices', label: 'Invoice totals' },
+  { id: 'weekdays', label: 'Expenses by weekday' },
+  { id: 'top', label: 'Top establishments' },
+  { id: 'recurring', label: 'Recurring expenses' },
+];
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, RouterLink, BaseChartDirective, FiltersComponent],
+  imports: [CommonModule, FormsModule, RouterLink, BaseChartDirective, FiltersComponent],
   template: `
-    <h1 class="page-title">Dashboard</h1>
-    <p class="page-sub">Overview of your imported financial data</p>
+    <div class="dash-head">
+      <div>
+        <h1 class="page-title">Dashboard</h1>
+        <p class="page-sub">Overview of your imported financial data</p>
+      </div>
+      <button class="ghost" (click)="customizing = !customizing">Customize</button>
+    </div>
+
+    <div class="card customize" *ngIf="customizing">
+      <h3>Customize dashboard</h3>
+      <div class="widget-list">
+        <div class="widget-item" *ngFor="let w of widgets; let i = index">
+          <label class="widget-check">
+            <input type="checkbox" [checked]="!hidden.has(w.id)" (change)="toggleWidget(w.id)">
+            {{ w.label }}
+          </label>
+          <span class="widget-move">
+            <button class="ghost" (click)="move(i, -1)" [disabled]="i === 0" title="Move up">↑</button>
+            <button class="ghost" (click)="move(i, 1)" [disabled]="i === widgets.length - 1" title="Move down">↓</button>
+          </span>
+        </div>
+      </div>
+    </div>
 
     <app-filters (changed)="load($event)" />
 
-    <div class="cards" *ngIf="summary">
-      <div class="stat red">
-        <div class="label">Total expenses</div>
-        <div class="value">{{ summary.total_expenses | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</div>
-        <div class="hint" *ngIf="avgMonthly">avg {{ avgMonthly | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}/month</div>
-      </div>
-      <div class="stat green">
-        <div class="label">Total payments</div>
-        <div class="value">{{ summary.total_payments | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</div>
-      </div>
-      <div class="stat">
-        <div class="label">Net balance</div>
-        <div class="value" [class.positive]="summary.net >= 0" [class.negative]="summary.net < 0">
-          {{ summary.net | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}
+    <div class="dash-grid">
+      <div class="widget span-2" *ngIf="visible('stats') && summary" [style.order]="orderOf('stats')">
+        <div class="cards">
+          <div class="stat red">
+            <div class="label">Total expenses</div>
+            <div class="value">{{ summary.total_expenses | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</div>
+            <div class="hint" *ngIf="avgMonthly">avg {{ avgMonthly | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}/month</div>
+          </div>
+          <div class="stat green">
+            <div class="label">Total payments</div>
+            <div class="value">{{ summary.total_payments | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</div>
+          </div>
+          <div class="stat">
+            <div class="label">Net balance</div>
+            <div class="value" [class.positive]="summary.net >= 0" [class.negative]="summary.net < 0">
+              {{ summary.net | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}
+            </div>
+          </div>
+          <div class="stat purple">
+            <div class="label">Last month</div>
+            <div class="value">{{ lastMonthExpenses | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</div>
+            <div class="hint" *ngIf="momChange !== null"
+              [class.positive]="momChange <= 0" [class.negative]="momChange > 0">
+              {{ momChange > 0 ? '+' : '' }}{{ momChange | number:'1.0-1' }}% vs previous month
+            </div>
+          </div>
+          <div class="stat" *ngIf="topEstablishment">
+            <div class="label">Top establishment</div>
+            <div class="value" style="font-size: 1.05rem">{{ topEstablishment.establishment }}</div>
+            <div class="hint">{{ topEstablishment.total | currency:'BRL':'symbol':'1.2-2':'pt-BR' }} · {{ topEstablishment.count }}x</div>
+          </div>
         </div>
       </div>
-      <div class="stat purple">
-        <div class="label">Last month</div>
-        <div class="value">{{ lastMonthExpenses | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</div>
-        <div class="hint" *ngIf="momChange !== null"
-          [class.positive]="momChange <= 0" [class.negative]="momChange > 0">
-          {{ momChange > 0 ? '+' : '' }}{{ momChange | number:'1.0-1' }}% vs previous month
-        </div>
-      </div>
-      <div class="stat" *ngIf="topEstablishment">
-        <div class="label">Top establishment</div>
-        <div class="value" style="font-size: 1.05rem">{{ topEstablishment.establishment }}</div>
-        <div class="hint">{{ topEstablishment.total | currency:'BRL':'symbol':'1.2-2':'pt-BR' }} · {{ topEstablishment.count }}x</div>
-      </div>
-    </div>
 
-    <div class="card" *ngIf="budgets.length">
-      <h3>Budgets — {{ currentMonthLabel }} <a routerLink="/categories" class="muted" style="float: right; font-size: 0.8rem; font-weight: 400">manage →</a></h3>
-      <div class="budget-row" *ngFor="let b of budgets">
-        <div class="budget-head">
-          <span><span class="dot" [style.background]="b.color"></span>{{ b.name }}</span>
-          <span class="muted">
-            {{ b.spent | currency:'BRL':'symbol':'1.2-2':'pt-BR' }} / {{ b.budget | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}
-          </span>
-          <span class="budget-pct" [class.negative]="b.spent > b.budget">{{ pct(b) }}%</span>
-        </div>
-        <div class="progress">
-          <div [style.width]="barWidth(b)" [style.background]="b.spent > b.budget ? 'var(--red)' : b.color"></div>
+      <div class="widget span-2" *ngIf="visible('invoiceStatus') && invoiceList.length" [style.order]="orderOf('invoiceStatus')">
+        <div class="cards">
+          <div class="stat" [class.red]="overdueCount > 0">
+            <div class="label">Open invoices</div>
+            <div class="value">{{ openInvoiceTotal | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</div>
+            <div class="hint">{{ openInvoiceCount }} unpaid <a routerLink="/invoices" class="muted">manage →</a></div>
+          </div>
+          <div class="stat red" *ngIf="overdueCount">
+            <div class="label">Overdue</div>
+            <div class="value">{{ overdueCount }}</div>
+            <div class="hint">{{ overdueTotal | currency:'BRL':'symbol':'1.2-2':'pt-BR' }} past due</div>
+          </div>
+          <div class="stat purple" *ngIf="nextDue">
+            <div class="label">Next invoice due</div>
+            <div class="value" style="font-size: 1.05rem">{{ nextDue | date:'dd MMM yyyy':'':'pt-BR' }}</div>
+            <div class="hint">{{ nextDueTotal | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</div>
+          </div>
         </div>
       </div>
-    </div>
 
-    <div class="card">
-      <h3>Monthly flow</h3>
-      <div style="height: 300px">
-        <canvas baseChart [data]="monthlyChartData" [options]="barOptions" type="bar"></canvas>
+      <div class="widget span-2" *ngIf="visible('budgets') && budgets.length" [style.order]="orderOf('budgets')">
+        <div class="card">
+          <h3>Budgets — {{ budgetMonthLabel }}
+            <input type="month" class="budget-month" [(ngModel)]="budgetMonth" (ngModelChange)="loadBudgets()">
+            <a routerLink="/categories" class="muted" style="float: right; font-size: 0.8rem; font-weight: 400">manage →</a>
+          </h3>
+          <div class="budget-row" *ngFor="let b of budgets">
+            <div class="budget-head">
+              <span><span class="dot" [style.background]="b.color"></span>{{ b.name }}</span>
+              <span class="muted">
+                {{ b.spent | currency:'BRL':'symbol':'1.2-2':'pt-BR' }} / {{ b.budget | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}
+              </span>
+              <span class="budget-pct" [class.negative]="b.spent > b.budget">{{ pct(b) }}%</span>
+            </div>
+            <div class="progress">
+              <div [style.width]="barWidth(b)" [style.background]="b.spent > b.budget ? 'var(--red)' : b.color"></div>
+            </div>
+          </div>
+        </div>
       </div>
-    </div>
 
-    <div class="grid-2">
-      <div class="card" *ngIf="categoryChartData.labels?.length">
-        <h3>Spending by category</h3>
-        <div style="height: 280px">
-          <canvas baseChart [data]="categoryChartData" [options]="doughnutOptions" type="doughnut"></canvas>
+      <div class="widget span-2" *ngIf="visible('monthly')" [style.order]="orderOf('monthly')">
+        <div class="card">
+          <h3>Monthly flow</h3>
+          <div style="height: 300px">
+            <canvas baseChart [data]="monthlyChartData" [options]="barOptions" type="bar"></canvas>
+          </div>
         </div>
       </div>
-      <div class="card" *ngIf="holderChartData.labels?.length">
-        <h3>Expenses by holder</h3>
-        <div style="height: 280px">
-          <canvas baseChart [data]="holderChartData" [options]="doughnutOptions" type="doughnut"></canvas>
-        </div>
-      </div>
-    </div>
 
-    <div class="grid-2">
-      <div class="card" *ngIf="invoiceChartData.labels?.length">
-        <h3>Invoice totals (by statement)</h3>
-        <div style="height: 260px">
-          <canvas baseChart [data]="invoiceChartData" [options]="lineOptions" type="line"></canvas>
+      <div class="widget" *ngIf="visible('categories') && categoryChartData.labels?.length" [style.order]="orderOf('categories')">
+        <div class="card">
+          <h3>Spending by category</h3>
+          <div style="height: 280px">
+            <canvas baseChart [data]="categoryChartData" [options]="doughnutOptions" type="doughnut"></canvas>
+          </div>
         </div>
       </div>
-      <div class="card" *ngIf="weekdayChartData.labels?.length">
-        <h3>Expenses by weekday</h3>
-        <div style="height: 260px">
-          <canvas baseChart [data]="weekdayChartData" [options]="barOptions" type="bar"></canvas>
-        </div>
-      </div>
-    </div>
 
-    <div class="grid-2">
-      <div class="card">
-        <h3>Top establishments</h3>
-        <div style="height: 420px">
-          <canvas baseChart [data]="topChartData" [options]="topChartOptions" type="bar"></canvas>
+      <div class="widget" *ngIf="visible('holders') && holderChartData.labels?.length" [style.order]="orderOf('holders')">
+        <div class="card">
+          <h3>Expenses by holder</h3>
+          <div style="height: 280px">
+            <canvas baseChart [data]="holderChartData" [options]="doughnutOptions" type="doughnut"></canvas>
+          </div>
         </div>
       </div>
-      <div class="card" *ngIf="recurringItems.length">
-        <h3>Recurring expenses <span class="muted" style="font-weight: 400; font-size: 0.8rem">(in 3+ months)</span></h3>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr><th>Establishment</th><th>Category</th><th class="num">Months</th><th class="num">Avg</th><th class="num">Total</th></tr>
-            </thead>
-            <tbody>
-              <tr *ngFor="let r of recurringItems">
-                <td>{{ r.establishment }}</td>
-                <td>
-                  <span class="pill cat" *ngIf="r.category" [style.color]="r.color" [style.background]="r.color + '22'">{{ r.category }}</span>
-                  <span class="muted" *ngIf="!r.category">—</span>
-                </td>
-                <td class="num">{{ r.months }}</td>
-                <td class="num">{{ r.avg_amount | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</td>
-                <td class="num">{{ r.total | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</td>
-              </tr>
-            </tbody>
-          </table>
+
+      <div class="widget" *ngIf="visible('invoices') && invoiceChartData.labels?.length" [style.order]="orderOf('invoices')">
+        <div class="card">
+          <h3>Invoice totals (by statement) <a routerLink="/invoices" class="muted" style="float: right; font-size: 0.8rem; font-weight: 400">details →</a></h3>
+          <div style="height: 260px">
+            <canvas baseChart [data]="invoiceChartData" [options]="lineOptions" type="line"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="widget" *ngIf="visible('weekdays') && weekdayChartData.labels?.length" [style.order]="orderOf('weekdays')">
+        <div class="card">
+          <h3>Expenses by weekday</h3>
+          <div style="height: 260px">
+            <canvas baseChart [data]="weekdayChartData" [options]="barOptions" type="bar"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="widget" *ngIf="visible('top')" [style.order]="orderOf('top')">
+        <div class="card">
+          <h3>Top establishments</h3>
+          <div style="height: 420px">
+            <canvas baseChart [data]="topChartData" [options]="topChartOptions" type="bar"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="widget" *ngIf="visible('recurring') && recurringItems.length" [style.order]="orderOf('recurring')">
+        <div class="card">
+          <h3>Recurring expenses <span class="muted" style="font-weight: 400; font-size: 0.8rem">(in 3+ months)</span></h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Establishment</th><th>Category</th><th class="num">Months</th><th class="num">Avg</th><th class="num">Total</th></tr>
+              </thead>
+              <tbody>
+                <tr *ngFor="let r of recurringItems">
+                  <td>{{ r.establishment }}</td>
+                  <td>
+                    <span class="pill cat" *ngIf="r.category" [style.color]="r.color" [style.background]="r.color + '22'">{{ r.category }}</span>
+                    <span class="muted" *ngIf="!r.category">—</span>
+                  </td>
+                  <td class="num">{{ r.months }}</td>
+                  <td class="num">{{ r.avg_amount | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</td>
+                  <td class="num">{{ r.total | currency:'BRL':'symbol':'1.2-2':'pt-BR' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>
   `,
+  styles: [`
+    .dash-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
+    .dash-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+    .dash-grid > .widget { min-width: 0; }
+    .dash-grid > .widget > .card, .dash-grid > .widget > .cards { margin-left: 0; margin-right: 0; }
+    .span-2 { grid-column: 1 / -1; }
+    .widget .card { height: calc(100% - 1.25rem); box-sizing: border-box; }
+    .customize .widget-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.4rem 1.5rem; }
+    .widget-item { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; font-size: 0.88rem; }
+    .widget-check { display: flex; align-items: center; gap: 0.5rem; text-transform: none; letter-spacing: 0; color: var(--text); font-weight: 500; margin: 0; }
+    .widget-check input { accent-color: var(--accent); }
+    .widget-move { display: flex; gap: 0.25rem; }
+    .widget-move button { padding: 0.1rem 0.5rem; min-width: 0; }
+    .budget-month { float: right; margin-left: 0.75rem; padding: 0.2rem 0.4rem; min-width: 0; font-size: 0.8rem; }
+    @media (max-width: 1000px) { .dash-grid { grid-template-columns: 1fr; } }
+  `],
 })
 export class DashboardComponent {
   private api = inject(ApiService);
@@ -149,8 +243,20 @@ export class DashboardComponent {
   topEstablishment: EstablishmentTotal | null = null;
   budgets: BudgetStatus[] = [];
   recurringItems: RecurringItem[] = [];
-  currentMonth = new Date().toISOString().slice(0, 7);
-  currentMonthLabel = new Date().toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  budgetMonth = new Date().toISOString().slice(0, 7);
+
+  invoiceList: Invoice[] = [];
+  openInvoiceTotal = 0;
+  openInvoiceCount = 0;
+  overdueCount = 0;
+  overdueTotal = 0;
+  nextDue: string | null = null;
+  nextDueTotal = 0;
+
+  customizing = false;
+  widgets: WidgetDef[] = DEFAULT_WIDGETS.map((w) => ({ ...w }));
+  hidden = new Set<string>();
+  private lastFilters: Filters = {};
 
   barOptions: ChartConfiguration<'bar'>['options'] = {
     responsive: true,
@@ -187,6 +293,41 @@ export class DashboardComponent {
   weekdayChartData: ChartConfiguration<'bar'>['data'] = { labels: [], datasets: [] };
   topChartData: ChartConfiguration<'bar'>['data'] = { labels: [], datasets: [] };
 
+  constructor() {
+    this.restoreLayout();
+  }
+
+  get budgetMonthLabel(): string {
+    const [y, m] = this.budgetMonth.split('-').map(Number);
+    return new Date(y, m - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  }
+
+  visible(id: string): boolean {
+    return !this.hidden.has(id);
+  }
+
+  orderOf(id: string): number {
+    return this.widgets.findIndex((w) => w.id === id);
+  }
+
+  toggleWidget(id: string): void {
+    if (this.hidden.has(id)) {
+      this.hidden.delete(id);
+    } else {
+      this.hidden.add(id);
+    }
+    this.saveLayout();
+  }
+
+  move(index: number, delta: number): void {
+    const target = index + delta;
+    if (target < 0 || target >= this.widgets.length) return;
+    const copy = [...this.widgets];
+    [copy[index], copy[target]] = [copy[target], copy[index]];
+    this.widgets = copy;
+    this.saveLayout();
+  }
+
   pct(b: BudgetStatus): number {
     return Math.round((b.spent / b.budget) * 100);
   }
@@ -196,6 +337,7 @@ export class DashboardComponent {
   }
 
   load(f: Filters): void {
+    this.lastFilters = f;
     forkJoin({
       summary: this.api.summary(f),
       monthly: this.api.monthly(f),
@@ -204,13 +346,16 @@ export class DashboardComponent {
       weekdays: this.api.byWeekday(f),
       invoices: this.api.invoiceTotals(f),
       categories: this.api.byCategory(f),
-      budgets: this.api.budgetStatus(this.currentMonth, f),
+      budgets: this.api.budgetStatus(this.budgetMonth, f),
       recurring: this.api.recurring(f),
-    }).subscribe(({ summary, monthly, top, holders, weekdays, invoices, categories, budgets, recurring }) => {
+      invoiceList: this.api.invoices(),
+    }).subscribe(({ summary, monthly, top, holders, weekdays, invoices, categories, budgets, recurring, invoiceList }) => {
       this.summary = summary;
       this.topEstablishment = top[0] ?? null;
       this.budgets = budgets;
       this.recurringItems = recurring;
+      this.invoiceList = invoiceList;
+      this.computeInvoiceStatus(invoiceList, invoices);
       const active = monthly.filter((m) => m.expenses > 0);
       this.avgMonthly = active.length ? active.reduce((acc, m) => acc + m.expenses, 0) / active.length : null;
       const last = monthly[monthly.length - 1];
@@ -226,6 +371,72 @@ export class DashboardComponent {
       this.buildWeekdays(weekdays);
       this.buildInvoices(invoices);
     });
+  }
+
+  loadBudgets(): void {
+    this.api.budgetStatus(this.budgetMonth, this.lastFilters).subscribe((b) => (this.budgets = b));
+  }
+
+  private computeInvoiceStatus(invoiceList: Invoice[], totals: InvoiceTotal[]): void {
+    const today = new Date();
+    const byId = new Map(totals.map((t) => [t.import_id, t]));
+    let openTotal = 0, openCount = 0, overdueTotal = 0, overdueCount = 0;
+    let nextDue: string | null = null, nextDueTotal = 0;
+    for (const inv of invoiceList) {
+      if (inv.paid || !inv.reference_date) continue;
+      const total = byId.get(inv.id);
+      const ref = new Date(inv.reference_date + 'T00:00:00');
+      const amount = total?.expenses ?? 0;
+      if (ref < today) {
+        overdueCount++;
+        overdueTotal += amount;
+        if (!nextDue || ref < new Date(nextDue + 'T00:00:00')) {
+          nextDue = inv.reference_date;
+          nextDueTotal = amount;
+        }
+      } else {
+        openTotal += amount;
+        openCount++;
+        if (!nextDue || ref < new Date(nextDue + 'T00:00:00')) {
+          nextDue = inv.reference_date;
+          nextDueTotal = amount;
+        }
+      }
+    }
+    this.openInvoiceTotal = openTotal;
+    this.openInvoiceCount = openCount;
+    this.overdueCount = overdueCount;
+    this.overdueTotal = overdueTotal;
+    this.nextDue = nextDue;
+    this.nextDueTotal = nextDueTotal;
+  }
+
+  private restoreLayout(): void {
+    try {
+      const raw = localStorage.getItem(LAYOUT_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { order?: string[]; hidden?: string[] };
+      if (parsed.order?.length) {
+        const known = new Set(DEFAULT_WIDGETS.map((w) => w.id));
+        const ordered = parsed.order.filter((id) => known.has(id));
+        const missing = DEFAULT_WIDGETS.filter((w) => !ordered.includes(w.id));
+        this.widgets = [...ordered, ...missing.map((w) => w.id)].map(
+          (id) => DEFAULT_WIDGETS.find((w) => w.id === id)!
+        );
+      }
+      if (parsed.hidden?.length) {
+        this.hidden = new Set(parsed.hidden.filter((id) => DEFAULT_WIDGETS.some((w) => w.id === id)));
+      }
+    } catch {
+      // ignore corrupted layout, keep defaults
+    }
+  }
+
+  private saveLayout(): void {
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify({
+      order: this.widgets.map((w) => w.id),
+      hidden: [...this.hidden],
+    }));
   }
 
   private buildMonthly(points: MonthlyPoint[]): void {
