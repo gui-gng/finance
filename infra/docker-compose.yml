@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: finance
       POSTGRES_DB: finance
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -24,7 +24,7 @@ services:
     container_name: finance-pgadmin
     restart: unless-stopped
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@finance.local
+      PGADMIN_DEFAULT_EMAIL: admin@finance.com
       PGADMIN_DEFAULT_PASSWORD: admin
     ports:
       - "5050:80"
