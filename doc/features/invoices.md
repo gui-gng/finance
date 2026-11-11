@@ -1,13 +1,22 @@
-# Credit Card Invoice Control
+# Invoice & Card Control
 
-Goal: turn the raw list of imported faturas into an actionable invoice workflow — what is open, what is overdue, what changed month over month, and what installments are still running.
+## Implemented
 
-Inspired by multi-card dashboard best practices (consolidated invoice view, due-date urgency indicators, paid status, utilization-style KPIs).
+- [x] **Paid/unpaid status per invoice** — `imports` has `paid`/`paid_at`; `PATCH /api/invoices/{id}/paid` toggles it; status exposed in `/api/invoices` and `/api/dashboard/invoices`.
+- [x] **Invoices page** — `/invoices` route listing every invoice: reference month, total, status toggle, due-date urgency badge (overdue / due / open / paid), MoM variation.
+- [x] **Invoice detail view** — clicking an invoice expands: full transaction list, spending by category, installment info per transaction.
+- [x] **Installments overview** — active installments grouped by establishment with monthly amount, progress (x/y), and remaining value.
+- [x] **Dashboard invoice-status summary** — strip with open total, overdue count/amount, next due date.
 
-## Features
+## More features
 
-- [x] **Paid/unpaid status per invoice** — `imports` table gains `paid`/`paid_at` columns (auto-migrated); `PATCH /api/invoices/{id}/paid` toggles it; status exposed in `/api/invoices` and `/api/dashboard/invoices`.
-- [x] **Invoices page** — new `/invoices` route listing every invoice: reference month, total, payment status toggle, due-date urgency badge (overdue / due this month / paid), and month-over-month variation vs the previous invoice.
-- [x] **Invoice detail view** — clicking an invoice expands it: full transaction list, spending by category, and installment progress for that statement.
-- [x] **Installments overview** — section listing active installments (where `installment_number < installment_total`) grouped by establishment: monthly amount, installment progress (x/y), category, and holder.
-- [x] **Dashboard invoice-status summary** — strip on the dashboard with total open (unpaid) invoice amount, overdue invoice count, and the next due date.
+- [ ] **Due-date calendar** — calendar view of all invoice due dates and recurring charges, with paid/open coloring.
+- [ ] **Payment reminders** — configurable in-app reminders N days before an invoice due date (and when overdue).
+- [ ] **Invoice notes** — free-text note per invoice (e.g., how it was paid, disputed charges).
+- [ ] **Credit limit & utilization** — store limit per card/holder; show utilization % per invoice and combined, with a 30% threshold warning.
+- [ ] **Minimum payment tracking** — record the bank's minimum due vs actual payment; show what was paid each month.
+- [ ] **Partial payments** — track multiple payments against one invoice instead of a single paid flag.
+- [ ] **Invoice timeline** — per-card timeline of statement totals with paid markers and due-date markers.
+- [ ] **Card comparison** — when multiple cards exist, side-by-side totals/utilization/paid status.
+- [ ] **Forecast invoice close** — project the current open month's invoice from spending to date.
+- [ ] **Payment sequencing hint** — order unpaid invoices by urgency (overdue → due soon → largest).
