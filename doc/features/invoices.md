@@ -10,13 +10,13 @@
 
 ## More features
 
-- [ ] **Due-date calendar** — calendar view of all invoice due dates and recurring charges, with paid/open coloring.
-- [ ] **Payment reminders** — configurable in-app reminders N days before an invoice due date (and when overdue).
-- [ ] **Invoice notes** — free-text note per invoice (e.g., how it was paid, disputed charges).
-- [ ] **Credit limit & utilization** — store limit per card/holder; show utilization % per invoice and combined, with a 30% threshold warning.
-- [ ] **Minimum payment tracking** — record the bank's minimum due vs actual payment; show what was paid each month.
-- [ ] **Partial payments** — track multiple payments against one invoice instead of a single paid flag.
-- [ ] **Invoice timeline** — per-card timeline of statement totals with paid markers and due-date markers.
-- [ ] **Card comparison** — when multiple cards exist, side-by-side totals/utilization/paid status.
-- [ ] **Forecast invoice close** — project the current open month's invoice from spending to date.
-- [ ] **Payment sequencing hint** — order unpaid invoices by urgency (overdue → due soon → largest).
+- [x] **Due-date calendar** — calendar view of all invoice due dates and recurring charges, with paid/open coloring.
+- [x] **Payment reminders** — configurable in-app reminders N days before an invoice due date (and when overdue).
+- [x] **Invoice notes** — free-text note per invoice (e.g., how it was paid, disputed charges).
+- [x] **Credit limit & utilization** — store limit per card/holder; show utilization % per invoice and combined, with a 30% threshold warning.
+- [x] **Minimum payment tracking** — record the bank's minimum due vs actual payment; show what was paid each month.
+- [x] **Partial payments** — track multiple payments against one invoice instead of a single paid flag.
+- [x] **Invoice timeline** — per-card timeline of statement totals with paid markers and due-date markers.
+- [x] **Card comparison** — when multiple cards exist, side-by-side totals/utilization/paid status.
+- [x] **Forecast invoice close** — project the current open month's invoice from spending to date.
+- [x] **Payment sequencing hint** — order unpaid invoices by urgency (overdue → due soon → largest).

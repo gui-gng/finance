@@ -23,8 +23,8 @@ Prerequisites: Docker and Node.js/npm.
 
 That's it — the script starts the database, builds and launches the backend, and serves the frontend. Then open:
 
-- **App**: http://localhost:4200
-- **API**: http://localhost:8080
+- **App**: http://localhost:4200 (login: password from `FINANCE_PASSWORD`, default `finance`)
+- **API**: http://localhost:8080 (all `/api/*` routes need a bearer token from `POST /api/auth/login`)
 - **pgAdmin**: http://localhost:5050 (admin@finance.com / admin)
 
 Press `Ctrl+C` to stop the frontend (backend and database keep running in Docker).

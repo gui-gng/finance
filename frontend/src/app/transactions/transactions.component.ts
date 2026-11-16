@@ -47,6 +47,7 @@ interface SavedView { name: string; filters: Filters }
             <option value="">Set category…</option>
             <option *ngFor="let c of categories" [ngValue]="c.id">{{ c.name }}</option>
           </select>
+          <button class="ghost" *ngIf="selected.size === 2" (click)="pairSelected()" title="exclude both from reports as a refund pair">Pair as refund</button>
           <button class="ghost" (click)="clearSelection()">Clear</button>
         </ng-container>
       </div>
@@ -275,6 +276,18 @@ export class TransactionsComponent implements OnInit {
   }
 
   clearSelection(): void { this.selected.clear(); }
+
+  pairSelected(): void {
+    const [expenseId, refundId] = [...this.selected];
+    this.api.pairRefund(expenseId, refundId, true).subscribe(() => {
+      this.toasts.show('Refund pair excluded from reports', {
+        label: 'Undo',
+        run: () => this.api.pairRefund(expenseId, refundId, false).subscribe(() => this.load()),
+      });
+      this.selected.clear();
+      this.load();
+    });
+  }
 
   bulkCategorize(categoryId: number | string): void {
     if (!categoryId) return;

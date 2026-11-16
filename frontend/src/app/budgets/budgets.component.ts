@@ -2,6 +2,8 @@ import { Component, OnInit, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { forkJoin } from 'rxjs';
+import { BaseChartDirective } from 'ng2-charts';
+import { ChartConfiguration } from 'chart.js';
 
 import {
   ApiService, BudgetStatus, BudgetTemplate, Category, Goal, TrendPoint,
@@ -16,7 +18,7 @@ interface Suggestion { category_id: number; name: string; amount: number; apply:
 @Component({
   selector: 'app-budgets',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, BaseChartDirective],
   template: `
     <h1 class="page-title">Budgets</h1>
     <p class="page-sub">Monthly budgets, goals, templates and long-range views</p>
@@ -71,6 +73,13 @@ interface Suggestion { category_id: number; name: string; amount: number; apply:
       <div class="digest" *ngIf="overBudgetList.length">
         <strong>Over budget:</strong>
         <span *ngFor="let b of overBudgetList">{{ b.name }} (+{{ fmt(b.spent - b.budget) }})</span>
+      </div>
+    </div>
+
+    <div class="card" *ngIf="trendChartData.labels?.length">
+      <h3>Budget vs actual trend <span class="muted" style="font-weight: 400; font-size: 0.8rem">(current budget vs last 6 months of spending, top categories)</span></h3>
+      <div style="height: 300px">
+        <canvas baseChart [data]="trendChartData" [options]="trendOptions" type="line"></canvas>
       </div>
     </div>
 
@@ -190,6 +199,13 @@ export class BudgetsComponent implements OnInit {
   income = 0;
   planResult = '';
   last12: { full: string; short: string }[] = [];
+  trendChartData: ChartConfiguration<'line'>['data'] = { labels: [], datasets: [] };
+  trendOptions: ChartConfiguration<'line'>['options'] = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { labels: { usePointStyle: true, boxWidth: 8 } } },
+    scales: { y: { beginAtZero: true, grid: { color: 'rgba(148,163,184,0.08)' } }, x: { grid: { display: false } } },
+  };
 
   ngOnInit(): void {
     const now = new Date();
@@ -210,7 +226,30 @@ export class BudgetsComponent implements OnInit {
       this.templates = templates;
       this.categories = categories;
       this.trend = trend;
+      this.buildTrendChart(budgets, trend);
     });
+  }
+
+  private buildTrendChart(budgets: BudgetStatus[], trend: TrendPoint[]): void {
+    const months = [...new Set(trend.map((p) => p.month))].sort().slice(-6);
+    const top = budgets.slice().sort((a, b) => b.budget - a.budget).slice(0, 5);
+    const palette = ['#5b8cff', '#9b6bff', '#34d399', '#fbbf24', '#f87171'];
+    const datasets: ChartConfiguration<'line'>['data']['datasets'] = top.map((b, i) => ({
+      label: b.name,
+      data: months.map((m) => trend.find((p) => p.category_id === b.category_id && p.month === m)?.spent ?? 0),
+      borderColor: palette[i % palette.length],
+      pointRadius: 3,
+      tension: 0.3,
+    }));
+    datasets.push({
+      label: 'budget',
+      data: months.map(() => budgets.reduce((a, b) => a + b.budget, 0)),
+      borderColor: '#8b93a7',
+      borderDash: [6, 4],
+      pointRadius: 0,
+      tension: 0,
+    } as never);
+    this.trendChartData = { labels: months, datasets };
   }
 
   fmt(v: number): string { return this.settings.fmt(v); }

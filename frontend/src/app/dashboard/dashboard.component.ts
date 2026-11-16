@@ -118,6 +118,11 @@ interface Pin { category_id?: number; holder?: string }
 
     <app-filters (changed)="load($event)" />
 
+    <div class="empty-state card" *ngIf="summary && !summary.count">
+      <div class="big">📊</div>
+      <p>No data yet. <a routerLink="/import">Import your first statement</a> to see the dashboard come alive.</p>
+    </div>
+
     <div class="dash-grid" [class.side-by-side]="!settings.s.mobileStack" #dashGrid>
       <div class="widget span-2" *ngIf="visible('stats') && summary" [style.order]="orderOf('stats')">
         <div class="cards">
@@ -695,7 +700,8 @@ export class DashboardComponent implements OnDestroy {
       backgroundColor: 'rgba(91,140,255,0.15)',
       fill: this.invoiceChartType === 'line',
       tension: 0.35,
-      pointRadius: 3,
+      pointRadius: 4,
+      pointBackgroundColor: withRef.map((i) => (i.paid ? '#34d399' : '#f87171')),
     } as never;
     this.invoiceChartData = {
       labels: withRef.map((i) => (i.reference_date ?? '').slice(0, 7)),
