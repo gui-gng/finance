@@ -5,8 +5,20 @@
   <title>Finance</title>
   <base href="/">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0e14">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <script>
+    // Optional API override: set window.__API_BASE__ before the app loads
+    // (e.g. via a reverse proxy config). Defaults to localhost in api.service.
+    try {
+      var saved = JSON.parse(localStorage.getItem('finance-settings') || '{}');
+      if (saved.apiBase) window.__API_BASE__ = saved.apiBase;
+    } catch (e) { /* ignore */ }
+  </script>
 </head>
 <body>
   <app-root></app-root>
+  <noscript>Please enable JavaScript to continue using this application.</noscript>
 </body>
 </html>

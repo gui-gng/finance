@@ -24,6 +24,13 @@ import { ApiService, Category } from '../api.service';
           <input type="color" [(ngModel)]="newColor" class="color-input">
         </div>
         <div>
+          <label>Parent (subcategory)</label>
+          <select [(ngModel)]="newParentId">
+            <option [ngValue]="0">None</option>
+            <option *ngFor="let c of categories" [ngValue]="c.id">{{ c.name }}</option>
+          </select>
+        </div>
+        <div>
           <label>&nbsp;</label>
           <button (click)="addCategory()" [disabled]="!newName">Add category</button>
         </div>
@@ -44,7 +51,9 @@ import { ApiService, Category } from '../api.service';
 
     <div class="card" *ngFor="let c of categories">
       <div class="cat-head">
-        <h3 style="margin: 0"><span class="dot" [style.background]="c.color"></span>{{ c.name }}</h3>
+        <h3 style="margin: 0"><span class="dot" [style.background]="c.color"></span>{{ c.name }}
+          <span class="muted" style="font-size: 0.72rem; font-weight: 400" *ngIf="c.parent_id">↳ subcategory</span>
+        </h3>
         <button class="ghost danger" (click)="removeCategory(c)">Delete</button>
       </div>
 
@@ -84,6 +93,7 @@ export class CategoriesComponent implements OnInit {
   categories: Category[] = [];
   newName = '';
   newColor = '#5b8cff';
+  newParentId = 0;
   newRule: Record<number, string> = {};
   budgetInput: Record<number, string | undefined> = {};
   uncategorized: number | null = null;
@@ -101,8 +111,9 @@ export class CategoriesComponent implements OnInit {
   }
 
   addCategory(): void {
-    this.api.createCategory(this.newName.trim(), this.newColor).subscribe(() => {
+    this.api.createCategory(this.newName.trim(), this.newColor, this.newParentId || null).subscribe(() => {
       this.newName = '';
+      this.newParentId = 0;
       this.reload();
     });
   }

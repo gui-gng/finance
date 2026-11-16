@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { forkJoin } from 'rxjs';
 
 import { ApiService, Category, Filters, Invoice, Person, Source } from '../api.service';
+import { SettingsService } from '../services/settings.service';
 
 const MONTHS_PT = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 
@@ -94,6 +95,7 @@ interface MonthOption {
 })
 export class FiltersComponent implements OnInit {
   private api = inject(ApiService);
+  private settings = inject(SettingsService);
 
   @Input() showSearch = false;
   @Output() changed = new EventEmitter<Filters>();
@@ -141,7 +143,11 @@ export class FiltersComponent implements OnInit {
       this.categories = categories;
     });
     this.months = this.buildMonths();
-    queueMicrotask(() => this.emit());
+    if (this.settings.s.defaultPeriod && this.settings.s.defaultPeriod !== 'all') {
+      this.applyPreset(this.settings.s.defaultPeriod);
+    } else {
+      queueMicrotask(() => this.emit());
+    }
   }
 
   onScopeChange(): void {

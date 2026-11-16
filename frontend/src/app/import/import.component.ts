@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { forkJoin } from 'rxjs';
 
-import { ApiService, ImportResult, Person, Source } from '../api.service';
+import { ApiService, ImportResult, Person, PreviewFile, Source } from '../api.service';
 
 @Component({
   selector: 'app-import',
@@ -11,7 +11,7 @@ import { ApiService, ImportResult, Person, Source } from '../api.service';
   imports: [CommonModule, FormsModule],
   template: `
     <h1 class="page-title">Import</h1>
-    <p class="page-sub">Upload statement files for a person and source</p>
+    <p class="page-sub">Upload statement files for a person and source — preview before committing</p>
 
     <div class="card">
       <div class="filters">
@@ -49,6 +49,68 @@ import { ApiService, ImportResult, Person, Source } from '../api.service';
           <button class="ghost" (click)="addSource()" [disabled]="!newSource">Add source</button>
         </div>
       </div>
+
+      <div class="filters" style="margin-top: 1rem">
+        <div>
+          <label>Parser</label>
+          <select [(ngModel)]="parser">
+            <option value="xp">XP (fatura CSV)</option>
+            <option value="nubank">Nubank CSV</option>
+            <option value="mapped">Generic CSV (map columns)</option>
+          </select>
+        </div>
+        <div *ngIf="parser === 'mapped'">
+          <label>Date format</label>
+          <select [(ngModel)]="map.date_format">
+            <option value="2006-01-02">YYYY-MM-DD</option>
+            <option value="02/01/2006">DD/MM/YYYY</option>
+            <option value="01/02/2006">MM/DD/YYYY</option>
+          </select>
+        </div>
+        <div *ngIf="parser === 'mapped'">
+          <label>Decimal</label>
+          <select [(ngModel)]="map.decimal_comma">
+            <option [ngValue]="true">comma (1.234,56)</option>
+            <option [ngValue]="false">point (1234.56)</option>
+          </select>
+        </div>
+        <div *ngIf="parser === 'mapped'">
+          <label>Amount sign</label>
+          <select [(ngModel)]="map.expense_positive">
+            <option [ngValue]="true">positive = expense</option>
+            <option [ngValue]="false">negative = expense</option>
+          </select>
+        </div>
+      </div>
+
+      <ng-container *ngIf="parser === 'mapped'">
+        <p class="muted" style="font-size: 0.82rem; margin: 0.5rem 0">Column indexes (0-based):</p>
+        <div class="filters">
+          <div><label>Date col</label><input type="number" min="0" [(ngModel)]="map.date" style="min-width: 70px"></div>
+          <div><label>Establishment col</label><input type="number" min="0" [(ngModel)]="map.establishment" style="min-width: 70px"></div>
+          <div><label>Amount col</label><input type="number" min="0" [(ngModel)]="map.amount" style="min-width: 70px"></div>
+          <div><label>Holder col</label><input type="number" min="-1" [(ngModel)]="map.holder" style="min-width: 70px"></div>
+          <div><label>Installment col</label><input type="number" min="-1" [(ngModel)]="map.installment" style="min-width: 70px"></div>
+          <div><label>Delimiter</label>
+            <select [(ngModel)]="map.delimiter">
+              <option value=",">,</option>
+              <option value=";">;</option>
+              <option value="tab">tab</option>
+            </select>
+          </div>
+        </div>
+      </ng-container>
+
+      <div class="filters" style="margin-top: 1rem">
+        <div>
+          <label>Currency</label>
+          <input type="text" [(ngModel)]="currency" maxlength="3" style="min-width: 80px">
+        </div>
+        <div *ngIf="currency && currency !== 'BRL'">
+          <label>FX rate to BRL</label>
+          <input type="number" step="0.0001" [(ngModel)]="fxRate" style="min-width: 100px">
+        </div>
+      </div>
     </div>
 
     <div class="card">
@@ -60,7 +122,7 @@ import { ApiService, ImportResult, Person, Source } from '../api.service';
         (dragleave)="dragging = false"
         (drop)="onDrop($event)"
       >
-        <strong>Drop .csv files here</strong> or click to browse
+        <strong>Drop .csv files here</strong> or click to browse (a whole folder works too)
         <input #fileInput type="file" multiple accept=".csv" hidden (change)="onFiles($event)">
       </div>
 
@@ -71,11 +133,36 @@ import { ApiService, ImportResult, Person, Source } from '../api.service';
         </li>
       </ul>
 
-      <div style="margin-top: 1rem; display: flex; gap: 0.75rem; align-items: center">
+      <div style="margin-top: 1rem; display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap">
+        <button class="ghost" (click)="preview()" [disabled]="!files.length || previewing">
+          {{ previewing ? 'Parsing...' : 'Preview' }}
+        </button>
         <button (click)="upload()" [disabled]="!canUpload() || uploading">
           {{ uploading ? 'Importing...' : 'Import ' + (files.length ? files.length + ' file(s)' : '') }}
         </button>
         <span class="error" *ngIf="error">{{ error }}</span>
+      </div>
+
+      <div *ngIf="previews.length" style="margin-top: 1.25rem">
+        <p class="muted">Parsed preview — rows with flags need review:</p>
+        <div *ngFor="let p of previews" style="margin-bottom: 1rem">
+          <p style="margin: 0 0 0.4rem"><strong>{{ p.filename }}</strong> ({{ p.rows.length }} rows)</p>
+          <div class="table-wrap preview-table">
+            <table>
+              <thead><tr><th>Date</th><th>Establishment</th><th>Holder</th><th class="num">Amount</th><th>Installment</th><th>Flags</th></tr></thead>
+              <tbody>
+                <tr *ngFor="let r of p.rows">
+                  <td>{{ r.date }}</td>
+                  <td>{{ r.establishment }}</td>
+                  <td class="muted">{{ r.holder }}</td>
+                  <td class="num" [class.negative]="r.amount > 0">{{ r.amount }}</td>
+                  <td class="muted">{{ r.installment || '—' }}</td>
+                  <td><span class="pill expense" *ngFor="let f of r.flags" style="margin-right: 0.25rem">{{ f }}</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
       <div *ngIf="results.length" style="margin-top: 1.25rem">
@@ -96,6 +183,9 @@ import { ApiService, ImportResult, Person, Source } from '../api.service';
       </div>
     </div>
   `,
+  styles: [`
+    .preview-table { max-height: 300px; overflow-y: auto; }
+  `],
 })
 export class ImportComponent implements OnInit {
   private api = inject(ApiService);
@@ -108,9 +198,18 @@ export class ImportComponent implements OnInit {
   newSource = '';
   files: File[] = [];
   results: ImportResult[] = [];
+  previews: PreviewFile[] = [];
   error = '';
   dragging = false;
   uploading = false;
+  previewing = false;
+  parser = 'xp';
+  currency = 'BRL';
+  fxRate = 1;
+  map = {
+    date: 0, establishment: 1, amount: 2, holder: -1, installment: -1,
+    delimiter: ',', date_format: '2006-01-02', decimal_comma: true, expense_positive: true,
+  };
 
   ngOnInit(): void {
     this.reload();
@@ -161,7 +260,31 @@ export class ImportComponent implements OnInit {
   private setFiles(files: File[]): void {
     this.files = files;
     this.results = [];
+    this.previews = [];
     this.error = '';
+  }
+
+  columnMapJSON(): string | undefined {
+    if (this.parser !== 'mapped') return undefined;
+    return JSON.stringify({
+      ...this.map,
+      delimiter: this.map.delimiter === 'tab' ? '\t' : this.map.delimiter,
+    });
+  }
+
+  preview(): void {
+    this.error = '';
+    this.previewing = true;
+    this.api.previewImport(this.files, this.parser, this.columnMapJSON()).subscribe({
+      next: (p) => {
+        this.previews = p;
+        this.previewing = false;
+      },
+      error: (e) => {
+        this.error = e.error?.error ?? 'Preview failed';
+        this.previewing = false;
+      },
+    });
   }
 
   canUpload(): boolean {
@@ -171,11 +294,16 @@ export class ImportComponent implements OnInit {
   upload(): void {
     this.error = '';
     this.uploading = true;
-    this.api.importFiles(this.personId, this.sourceId, this.files).subscribe({
+    this.api.importFiles(this.personId, this.sourceId, this.files, {
+      currency: this.currency || 'BRL',
+      fxRate: this.fxRate || 1,
+      columnMap: this.columnMapJSON(),
+    }).subscribe({
       next: (r) => {
         this.results = r;
         this.uploading = false;
         this.files = [];
+        this.previews = [];
       },
       error: (e) => {
         this.error = e.error?.error ?? 'Import failed';
@@ -184,3 +312,4 @@ export class ImportComponent implements OnInit {
     });
   }
 }
+
