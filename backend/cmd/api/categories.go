@@ -16,16 +16,19 @@ type CategoryRule struct {
 }
 
 type Category struct {
-	ID     int            `json:"id"`
-	Name   string         `json:"name"`
-	Color  string         `json:"color"`
-	Rules  []CategoryRule `json:"rules"`
-	Budget *float64       `json:"budget"`
+	ID       int            `json:"id"`
+	Name     string         `json:"name"`
+	Color    string         `json:"color"`
+	Rules    []CategoryRule `json:"rules"`
+	Budget   *float64       `json:"budget"`
+	ParentID *int           `json:"parent_id"`
+	Rollover bool           `json:"rollover"`
+	Period   string         `json:"period"`
 }
 
 func (h *Handler) ListCategories(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.db.pool.Query(r.Context(),
-		`SELECT c.id, c.name, c.color, b.monthly_amount,
+		`SELECT c.id, c.name, c.color, b.monthly_amount, c.parent_id, COALESCE(b.rollover, FALSE), COALESCE(b.period, 'monthly'),
 			COALESCE((SELECT jsonb_agg(jsonb_build_object('id', r.id, 'pattern', r.pattern) ORDER BY r.pattern)
 				FROM category_rules r WHERE r.category_id = c.id), '[]'::jsonb)
 		 FROM categories c
@@ -40,7 +43,7 @@ func (h *Handler) ListCategories(w http.ResponseWriter, r *http.Request) {
 	cats := []Category{}
 	for rows.Next() {
 		var c Category
-		if err := rows.Scan(&c.ID, &c.Name, &c.Color, &c.Budget, &c.Rules); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Color, &c.Budget, &c.ParentID, &c.Rollover, &c.Period, &c.Rules); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -51,8 +54,9 @@ func (h *Handler) ListCategories(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) CreateCategory(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name  string `json:"name"`
-		Color string `json:"color"`
+		Name     string `json:"name"`
+		Color    string `json:"color"`
+		ParentID *int   `json:"parent_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Name == "" {
 		writeError(w, http.StatusBadRequest, "name is required")
@@ -63,14 +67,15 @@ func (h *Handler) CreateCategory(w http.ResponseWriter, r *http.Request) {
 	}
 	var c Category
 	err := h.db.pool.QueryRow(r.Context(),
-		`INSERT INTO categories (name, color) VALUES ($1, $2)
+		`INSERT INTO categories (name, color, parent_id) VALUES ($1, $2, $3)
 		 ON CONFLICT (name) DO UPDATE SET color = EXCLUDED.color
 		 RETURNING id, name, color`,
-		body.Name, body.Color).Scan(&c.ID, &c.Name, &c.Color)
+		body.Name, body.Color, body.ParentID).Scan(&c.ID, &c.Name, &c.Color)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	c.ParentID = body.ParentID
 	c.Rules = []CategoryRule{}
 	writeJSON(w, http.StatusCreated, c)
 }
@@ -192,8 +197,13 @@ type BudgetStatus struct {
 	Color      string  `json:"color"`
 	Budget     float64 `json:"budget"`
 	Spent      float64 `json:"spent"`
+	Rollover   bool    `json:"rollover"`
+	Period     string  `json:"period"`
 }
 
+// DashboardBudgetStatus returns budget progress. When rollover is enabled the
+// previous month's leftover (budget minus spent, floored at 0) is added to the
+// effective budget. Weekly-period budgets compare against the current ISO week.
 func (h *Handler) DashboardBudgetStatus(w http.ResponseWriter, r *http.Request) {
 	month := r.URL.Query().Get("month")
 	if month == "" {
@@ -216,12 +226,14 @@ func (h *Handler) DashboardBudgetStatus(w http.ResponseWriter, r *http.Request) 
 	}
 
 	rows, err := h.db.pool.Query(r.Context(),
-		fmt.Sprintf(`SELECT c.id, c.name, c.color, b.monthly_amount,
+		fmt.Sprintf(`SELECT c.id, c.name, c.color, b.monthly_amount, b.rollover, b.period,
 			COALESCE((SELECT SUM(t.amount) FROM transactions t
-				WHERE t.category_id = c.id AND t.amount > 0 AND to_char(t.date, 'YYYY-MM') = $1 %s), 0)
+				WHERE t.category_id = c.id AND t.amount > 0 AND to_char(t.date, 'YYYY-MM') = $1 %s), 0),
+			COALESCE((SELECT SUM(t.amount) FROM transactions t
+				WHERE t.category_id = c.id AND t.amount > 0 AND to_char(t.date, 'YYYY-MM') = to_char(($1 || '-01')::date - '1 month'::interval, 'YYYY-MM') %s), 0)
 		 FROM budgets b
 		 JOIN categories c ON c.id = b.category_id
-		 ORDER BY c.name`, extra),
+		 ORDER BY c.name`, extra, extra),
 		args...)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -232,9 +244,37 @@ func (h *Handler) DashboardBudgetStatus(w http.ResponseWriter, r *http.Request) 
 	items := []BudgetStatus{}
 	for rows.Next() {
 		var b BudgetStatus
-		if err := rows.Scan(&b.CategoryID, &b.Name, &b.Color, &b.Budget, &b.Spent); err != nil {
+		var base, prevSpent float64
+		if err := rows.Scan(&b.CategoryID, &b.Name, &b.Color, &base, &b.Rollover, &b.Period, &b.Spent, &prevSpent); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
+		}
+		b.Budget = base
+		if b.Rollover {
+			b.Budget = base + max(0, base-prevSpent)
+		}
+		if b.Period == "weekly" {
+			weekExtra := ""
+			weekArgs := []any{b.CategoryID}
+			if v := r.URL.Query().Get("person_id"); v != "" {
+				if id, err := strconv.Atoi(v); err == nil {
+					weekArgs = append(weekArgs, id)
+					weekExtra += fmt.Sprintf(" AND t.person_id = $%d", len(weekArgs))
+				}
+			}
+			if v := r.URL.Query().Get("source_id"); v != "" {
+				if id, err := strconv.Atoi(v); err == nil {
+					weekArgs = append(weekArgs, id)
+					weekExtra += fmt.Sprintf(" AND t.source_id = $%d", len(weekArgs))
+				}
+			}
+			var weekSpent float64
+			_ = h.db.pool.QueryRow(r.Context(),
+				fmt.Sprintf(`SELECT COALESCE(SUM(t.amount), 0) FROM transactions t
+					WHERE t.category_id = $1 AND t.amount > 0
+					  AND date_trunc('week', t.date) = date_trunc('week', now()) %s`, weekExtra),
+				weekArgs...).Scan(&weekSpent)
+			b.Spent = weekSpent
 		}
 		items = append(items, b)
 	}

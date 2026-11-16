@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"io"
 	"regexp"
@@ -18,6 +19,7 @@ type ParsedTransaction struct {
 	Amount            float64
 	InstallmentNumber *int
 	InstallmentTotal  *int
+	Time              *time.Time
 }
 
 var brlAmountRe = regexp.MustCompile(`^-?[\d.]*,\d{2}$`)
@@ -110,4 +112,142 @@ func ReferenceDateFromFilename(name string) *time.Time {
 		return nil
 	}
 	return &t
+}
+
+// ParseNubankCSV parses a Nubank credit card statement export:
+// data;descricao;valor (semicolon separated, yyyy-mm-dd, BRL values with
+// decimal point). Negative amounts are purchases; positive are payments.
+func ParseNubankCSV(r io.Reader) ([]ParsedTransaction, error) {
+	cr := csv.NewReader(r)
+	cr.Comma = ';'
+	cr.LazyQuotes = true
+	cr.TrimLeadingSpace = true
+
+	header, err := cr.Read()
+	if err != nil {
+		return nil, fmt.Errorf("read header: %w", err)
+	}
+	if len(header) < 3 {
+		return nil, fmt.Errorf("unexpected header: %v", header)
+	}
+
+	var txs []ParsedTransaction
+	for {
+		rec, err := cr.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(rec) < 3 {
+			continue
+		}
+		date, err := time.Parse("2006-01-02", strings.TrimSpace(rec[0]))
+		if err != nil {
+			continue
+		}
+		v, err := strconv.ParseFloat(strings.TrimSpace(rec[2]), 64)
+		if err != nil {
+			continue
+		}
+		est := strings.TrimSpace(rec[1])
+		for _, p := range []string{"Pagamento em ", "Compra no débito ", "Compra no crédito ", "Compra internacional - ", "Compra recorrente - "} {
+			est = strings.TrimPrefix(est, p)
+		}
+		amount := -v // purchases negative -> positive expense; payments positive -> negative
+		txs = append(txs, ParsedTransaction{Date: date, Establishment: est, Amount: amount})
+	}
+	return txs, nil
+}
+
+// MappedColumnMap describes how to map arbitrary CSV columns onto transactions.
+type MappedColumnMap struct {
+	Delimiter       string `json:"delimiter"`
+	Date            int    `json:"date"`
+	DateFormat      string `json:"date_format"` // e.g. 2006-01-02 or 02/01/2006
+	Establishment   int    `json:"establishment"`
+	Amount          int    `json:"amount"`
+	Holder          int    `json:"holder"`
+	Installment     int    `json:"installment"` // -1 = absent
+	Time            int    `json:"time"`        // -1 = absent
+	DecimalComma    bool   `json:"decimal_comma"`
+	ExpensePositive bool   `json:"expense_positive"` // true: positive values are expenses
+}
+
+// ParseMappedCSV parses a CSV using a user-supplied column mapping (JSON).
+func ParseMappedCSV(r io.Reader, mappingJSON string) ([]ParsedTransaction, error) {
+	var m MappedColumnMap
+	if err := json.Unmarshal([]byte(mappingJSON), &m); err != nil {
+		return nil, fmt.Errorf("invalid column_map: %w", err)
+	}
+	if m.Delimiter == "" {
+		m.Delimiter = ","
+	}
+	if m.DateFormat == "" {
+		m.DateFormat = "2006-01-02"
+	}
+	cr := csv.NewReader(r)
+	cr.Comma = rune(m.Delimiter[0])
+	cr.LazyQuotes = true
+	cr.TrimLeadingSpace = true
+
+	var txs []ParsedTransaction
+	for {
+		rec, err := cr.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(rec) <= maxCol(m) {
+			continue
+		}
+		date, err := time.Parse(m.DateFormat, strings.TrimSpace(rec[m.Date]))
+		if err != nil {
+			continue
+		}
+		var amount float64
+		if m.DecimalComma {
+			amount, err = parseBRL(rec[m.Amount])
+		} else {
+			amount, err = strconv.ParseFloat(strings.TrimSpace(rec[m.Amount]), 64)
+		}
+		if err != nil {
+			continue
+		}
+		if !m.ExpensePositive {
+			amount = -amount
+		}
+		tx := ParsedTransaction{Date: date, Establishment: strings.TrimSpace(rec[m.Establishment]), Amount: amount}
+		if m.Holder >= 0 && m.Holder < len(rec) {
+			tx.Holder = strings.TrimSpace(rec[m.Holder])
+		}
+		if m.Installment >= 0 && m.Installment < len(rec) {
+			if mm := installmentRe.FindStringSubmatch(strings.TrimSpace(rec[m.Installment])); mm != nil {
+				n, _ := strconv.Atoi(mm[1])
+				t, _ := strconv.Atoi(mm[2])
+				tx.InstallmentNumber = &n
+				tx.InstallmentTotal = &t
+			}
+		}
+		if m.Time >= 0 && m.Time < len(rec) {
+			if tt, err := time.Parse("15:04", strings.TrimSpace(rec[m.Time])); err == nil {
+				tx.Time = &tt
+			}
+		}
+		txs = append(txs, tx)
+	}
+	return txs, nil
+}
+
+func maxCol(m MappedColumnMap) int {
+	max := m.Date
+	for _, c := range []int{m.Establishment, m.Amount, m.Holder, m.Installment, m.Time} {
+		if c > max {
+			max = c
+		}
+	}
+	return max
 }

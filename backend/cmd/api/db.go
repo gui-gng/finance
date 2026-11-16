@@ -94,6 +94,60 @@ CREATE TABLE IF NOT EXISTS budgets (
 
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS category_id INT REFERENCES categories(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_transactions_category ON transactions(category_id);
+
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS note TEXT NOT NULL DEFAULT '';
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS excluded BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS income BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS split_group UUID;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'BRL';
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS original_amount NUMERIC(14,2);
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS receipt TEXT NOT NULL DEFAULT '';
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS tx_time TIME;
+
+ALTER TABLE imports ADD COLUMN IF NOT EXISTS note TEXT NOT NULL DEFAULT '';
+ALTER TABLE imports ADD COLUMN IF NOT EXISTS min_payment NUMERIC(14,2);
+ALTER TABLE imports ADD COLUMN IF NOT EXISTS inserted_count INT NOT NULL DEFAULT 0;
+ALTER TABLE imports ADD COLUMN IF NOT EXISTS skipped_count INT NOT NULL DEFAULT 0;
+
+ALTER TABLE budgets ADD COLUMN IF NOT EXISTS rollover BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE budgets ADD COLUMN IF NOT EXISTS period TEXT NOT NULL DEFAULT 'monthly';
+
+ALTER TABLE categories ADD COLUMN IF NOT EXISTS parent_id INT REFERENCES categories(id) ON DELETE SET NULL;
+
+CREATE TABLE IF NOT EXISTS savings_goals (
+    id             SERIAL PRIMARY KEY,
+    name           TEXT NOT NULL,
+    target_amount  NUMERIC(14,2) NOT NULL DEFAULT 0,
+    saved_amount   NUMERIC(14,2) NOT NULL DEFAULT 0,
+    deadline       DATE,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS budget_templates (
+    id          SERIAL PRIMARY KEY,
+    name        TEXT NOT NULL,
+    category_id INT NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    amount      NUMERIC(14,2) NOT NULL,
+    UNIQUE (name, category_id)
+);
+
+CREATE TABLE IF NOT EXISTS merchant_aliases (
+    alias     TEXT PRIMARY KEY,
+    canonical TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS card_limits (
+    holder       TEXT PRIMARY KEY,
+    limit_amount NUMERIC(14,2) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS invoice_payments (
+    id        SERIAL PRIMARY KEY,
+    import_id INT NOT NULL REFERENCES imports(id) ON DELETE CASCADE,
+    amount    NUMERIC(14,2) NOT NULL,
+    paid_at   DATE NOT NULL DEFAULT CURRENT_DATE
+);
 `
 
 const categorizeSQL = `

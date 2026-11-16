@@ -42,6 +42,14 @@ type Transaction struct {
 	CategoryID        *int     `json:"category_id"`
 	CategoryName      *string  `json:"category_name"`
 	CategoryColor     *string  `json:"category_color"`
+	Note              string   `json:"note,omitempty"`
+	Tags              []string `json:"tags,omitempty"`
+	Excluded          bool     `json:"excluded"`
+	Income            bool     `json:"income"`
+	Currency          string   `json:"currency,omitempty"`
+	OriginalAmount    *float64 `json:"original_amount,omitempty"`
+	HasReceipt        bool     `json:"has_receipt,omitempty"`
+	TxTime            *string  `json:"tx_time,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -158,15 +166,20 @@ func (h *Handler) ListHolders(w http.ResponseWriter, r *http.Request) {
 }
 
 type Invoice struct {
-	ID            int     `json:"id"`
-	Name          string  `json:"name"`
-	Filename      string  `json:"filename"`
-	ReferenceDate *string `json:"reference_date"`
-	PersonID      int     `json:"person_id"`
-	SourceID      int     `json:"source_id"`
-	Transactions  int     `json:"transactions"`
-	Paid          bool    `json:"paid"`
-	PaidAt        *string `json:"paid_at,omitempty"`
+	ID            int      `json:"id"`
+	Name          string   `json:"name"`
+	Filename      string   `json:"filename"`
+	ReferenceDate *string  `json:"reference_date"`
+	PersonID      int      `json:"person_id"`
+	SourceID      int      `json:"source_id"`
+	Transactions  int      `json:"transactions"`
+	Paid          bool     `json:"paid"`
+	PaidAt        *string  `json:"paid_at,omitempty"`
+	Note          string   `json:"note,omitempty"`
+	MinPayment    *float64 `json:"min_payment,omitempty"`
+	InsertedCount int      `json:"inserted_count"`
+	SkippedCount  int      `json:"skipped_count"`
+	ImportedAt    string   `json:"imported_at"`
 }
 
 func (h *Handler) ListInvoices(w http.ResponseWriter, r *http.Request) {
@@ -191,7 +204,7 @@ func (h *Handler) ListInvoices(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.db.pool.Query(r.Context(),
-		fmt.Sprintf(`SELECT i.id, i.name, i.filename, i.reference_date, i.person_id, i.source_id, COUNT(t.id), i.paid, i.paid_at
+		fmt.Sprintf(`SELECT i.id, i.name, i.filename, i.reference_date, i.person_id, i.source_id, COUNT(t.id), i.paid, i.paid_at, i.note, i.min_payment, i.inserted_count, i.skipped_count, i.imported_at
 		 FROM imports i
 		 LEFT JOIN transactions t ON t.import_id = i.id
 		 %s
@@ -207,7 +220,8 @@ func (h *Handler) ListInvoices(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var v Invoice
 		var ref, paidAt *time.Time
-		if err := rows.Scan(&v.ID, &v.Name, &v.Filename, &ref, &v.PersonID, &v.SourceID, &v.Transactions, &v.Paid, &paidAt); err != nil {
+		var importedAt time.Time
+		if err := rows.Scan(&v.ID, &v.Name, &v.Filename, &ref, &v.PersonID, &v.SourceID, &v.Transactions, &v.Paid, &paidAt, &v.Note, &v.MinPayment, &v.InsertedCount, &v.SkippedCount, &importedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -219,6 +233,7 @@ func (h *Handler) ListInvoices(w http.ResponseWriter, r *http.Request) {
 			s := paidAt.Format("2006-01-02")
 			v.PaidAt = &s
 		}
+		v.ImportedAt = importedAt.Format("2006-01-02 15:04")
 		invoices = append(invoices, v)
 	}
 	writeJSON(w, http.StatusOK, invoices)
@@ -293,6 +308,16 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// multi-currency: amount is always stored converted to BRL;
+	// original_amount/currency preserve the source value when provided.
+	currency := r.FormValue("currency")
+	fxRate := 1.0
+	if v := r.FormValue("fx_rate"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			fxRate = f
+		}
+	}
+
 	results := []ImportResult{}
 	for _, fh := range files {
 		f, err := fh.Open()
@@ -305,6 +330,10 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 		switch sourceName {
 		case "xp":
 			txs, err = ParseXPInvoice(f)
+		case "nubank":
+			txs, err = ParseNubankCSV(f)
+		case "mapped":
+			txs, err = ParseMappedCSV(f, r.FormValue("column_map"))
 		default:
 			err = fmt.Errorf("no parser for source %q", sourceName)
 		}
@@ -314,7 +343,7 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		inserted, skipped, err := h.saveImport(r.Context(), personID, sourceID, fh.Filename, txs)
+		inserted, skipped, err := h.saveImport(r.Context(), personID, sourceID, fh.Filename, txs, currency, fxRate)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -356,7 +385,7 @@ func intValue(p *int) int {
 	return *p
 }
 
-func (h *Handler) saveImport(ctx context.Context, personID, sourceID int, filename string, txs []ParsedTransaction) (int, int, error) {
+func (h *Handler) saveImport(ctx context.Context, personID, sourceID int, filename string, txs []ParsedTransaction, currency string, fxRate float64) (int, int, error) {
 	tx, err := h.db.pool.Begin(ctx)
 	if err != nil {
 		return 0, 0, err
@@ -373,14 +402,33 @@ func (h *Handler) saveImport(ctx context.Context, personID, sourceID int, filena
 		return 0, 0, err
 	}
 
+	// Normalize establishment names through merchant aliases (longest match wins).
+	aliases, err := h.merchantAliases(ctx, tx)
+	if err != nil {
+		return 0, 0, err
+	}
+
 	inserted, skipped := 0, 0
+	rowCurrency := currency
+	if rowCurrency == "" {
+		rowCurrency = "BRL"
+	}
 	for i, t := range txs {
+		if c := canonicalEstablishment(t.Establishment, aliases); c != t.Establishment {
+			t.Establishment = c
+		}
+		amount := t.Amount
+		var original any
+		if rowCurrency != "BRL" && fxRate != 1 {
+			original = t.Amount
+			amount = t.Amount * fxRate
+		}
 		tag, err := tx.Exec(ctx,
-			`INSERT INTO transactions (uuid, import_id, person_id, source_id, date, establishment, holder, amount, installment_number, installment_total)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			`INSERT INTO transactions (uuid, import_id, person_id, source_id, date, establishment, holder, amount, installment_number, installment_total, currency, original_amount, tx_time)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 			 ON CONFLICT (uuid) DO NOTHING`,
 			transactionUUID(personID, sourceID, invoice, i, t),
-			importID, personID, sourceID, t.Date, t.Establishment, t.Holder, t.Amount, t.InstallmentNumber, t.InstallmentTotal)
+			importID, personID, sourceID, t.Date, t.Establishment, t.Holder, amount, t.InstallmentNumber, t.InstallmentTotal, rowCurrency, original, t.Time)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -389,6 +437,9 @@ func (h *Handler) saveImport(ctx context.Context, personID, sourceID int, filena
 		} else {
 			inserted++
 		}
+	}
+	if _, err := tx.Exec(ctx, "UPDATE imports SET inserted_count = $1, skipped_count = $2 WHERE id = $3", inserted, skipped, importID); err != nil {
+		return 0, 0, err
 	}
 	if inserted == 0 {
 		if _, err := tx.Exec(ctx, "DELETE FROM imports WHERE id = $1", importID); err != nil {
@@ -448,11 +499,19 @@ func (h *Handler) filters(r *http.Request) (string, []any) {
 	if v := q.Get("search"); v != "" {
 		add("establishment ILIKE '%%' || $%d || '%%'", v)
 	}
+	if v := q.Get("tag"); v != "" {
+		add("$%d = ANY(tags)", v)
+	}
+	if q.Get("include_excluded") != "1" {
+		where += " AND excluded = FALSE"
+	}
 	switch q.Get("type") {
 	case "expense":
-		where += " AND amount > 0"
+		where += " AND amount > 0 AND income = FALSE"
 	case "payment":
-		where += " AND amount < 0"
+		where += " AND amount < 0 AND income = FALSE"
+	case "income":
+		where += " AND income = TRUE"
 	}
 	return where, args
 }
@@ -481,7 +540,7 @@ func (h *Handler) ListTransactions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.db.pool.Query(r.Context(),
-		fmt.Sprintf(`SELECT t.id, t.date, t.establishment, t.holder, t.amount, t.installment_number, t.installment_total, t.person_id, t.source_id, t.import_id, t.category_id, c.name, c.color
+		fmt.Sprintf(`SELECT t.id, t.date, t.establishment, t.holder, t.amount, t.installment_number, t.installment_total, t.person_id, t.source_id, t.import_id, t.category_id, c.name, c.color, t.note, t.tags, t.excluded, t.income, t.currency, t.original_amount, t.receipt <> '', t.tx_time
 		 FROM transactions t
 		 LEFT JOIN categories c ON c.id = t.category_id
 		 %s ORDER BY t.date DESC, t.id DESC LIMIT %d OFFSET %d`, where, limit, offset),
@@ -496,11 +555,16 @@ func (h *Handler) ListTransactions(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var t Transaction
 		var d time.Time
-		if err := rows.Scan(&t.ID, &d, &t.Establishment, &t.Holder, &t.Amount, &t.InstallmentNumber, &t.InstallmentTotal, &t.PersonID, &t.SourceID, &t.ImportID, &t.CategoryID, &t.CategoryName, &t.CategoryColor); err != nil {
+		var tt *time.Time
+		if err := rows.Scan(&t.ID, &d, &t.Establishment, &t.Holder, &t.Amount, &t.InstallmentNumber, &t.InstallmentTotal, &t.PersonID, &t.SourceID, &t.ImportID, &t.CategoryID, &t.CategoryName, &t.CategoryColor, &t.Note, &t.Tags, &t.Excluded, &t.Income, &t.Currency, &t.OriginalAmount, &t.HasReceipt, &tt); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		t.Date = d.Format("2006-01-02")
+		if tt != nil {
+			s := tt.Format("15:04")
+			t.TxTime = &s
+		}
 		txs = append(txs, t)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"total": total, "items": txs})
@@ -509,6 +573,7 @@ func (h *Handler) ListTransactions(w http.ResponseWriter, r *http.Request) {
 type Summary struct {
 	TotalExpenses float64 `json:"total_expenses"`
 	TotalPayments float64 `json:"total_payments"`
+	TotalIncome   float64 `json:"total_income"`
 	Net           float64 `json:"net"`
 	Count         int     `json:"count"`
 	FirstDate     *string `json:"first_date"`
@@ -522,13 +587,14 @@ func (h *Handler) DashboardSummary(w http.ResponseWriter, r *http.Request) {
 	var first, last *time.Time
 	err := h.db.pool.QueryRow(r.Context(),
 		fmt.Sprintf(`SELECT
-			COALESCE(SUM(amount) FILTER (WHERE amount > 0), 0),
-			COALESCE(-SUM(amount) FILTER (WHERE amount < 0), 0),
+			COALESCE(SUM(amount) FILTER (WHERE amount > 0 AND income = FALSE), 0),
+			COALESCE(-SUM(amount) FILTER (WHERE amount < 0 AND income = FALSE), 0),
+			COALESCE(-SUM(amount) FILTER (WHERE income = TRUE), 0),
 			COALESCE(SUM(amount), 0),
 			COUNT(*),
 			MIN(date), MAX(date)
 		 FROM transactions %s`, where),
-		args...).Scan(&s.TotalExpenses, &s.TotalPayments, &s.Net, &s.Count, &first, &last)
+		args...).Scan(&s.TotalExpenses, &s.TotalPayments, &s.TotalIncome, &s.Net, &s.Count, &first, &last)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
