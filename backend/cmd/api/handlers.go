@@ -785,6 +785,13 @@ func (h *Handler) DashboardInvoices(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("search"); v != "" {
 		add("t.establishment ILIKE '%%' || $%d || '%%'", v)
 	}
+	if v := q.Get("category_id"); v != "" {
+		if v == "none" {
+			where += " AND t.category_id IS NULL"
+		} else if id, err := strconv.Atoi(v); err == nil {
+			add("t.category_id = $%d", id)
+		}
+	}
 	switch q.Get("type") {
 	case "expense":
 		where += " AND t.amount > 0"

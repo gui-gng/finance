@@ -98,6 +98,7 @@ export interface RecurringItem {
   total: number;
   category?: string;
   color?: string;
+  avg_day?: number;
 }
 
 export interface TransactionPage {

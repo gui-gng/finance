@@ -300,7 +300,10 @@ export class BudgetsComponent implements OnInit {
   }
 
   loadBudgets(): void {
-    this.api.budgetStatus(this.budgetMonth, {}).subscribe((b) => (this.budgets = b));
+    this.api.budgetStatus(this.budgetMonth, {}).subscribe((b) => {
+      this.budgets = b;
+      this.buildTrendChart(b, this.trend);
+    });
   }
 
   toggleRollover(b: BudgetStatus): void {

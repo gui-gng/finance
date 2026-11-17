@@ -289,6 +289,7 @@ type RecurringItem struct {
 	Total         float64 `json:"total"`
 	Category      *string `json:"category"`
 	Color         *string `json:"color"`
+	AvgDay        int     `json:"avg_day"`
 }
 
 func (h *Handler) DashboardRecurring(w http.ResponseWriter, r *http.Request) {
@@ -301,7 +302,8 @@ func (h *Handler) DashboardRecurring(w http.ResponseWriter, r *http.Request) {
 			AVG(t.amount),
 			SUM(t.amount),
 			MAX(c.name),
-			MAX(c.color)
+			MAX(c.color),
+			round(AVG(extract(day from t.date)))::int
 		 FROM transactions t
 		 LEFT JOIN categories c ON c.id = t.category_id
 		 %s AND t.amount > 0
@@ -319,7 +321,7 @@ func (h *Handler) DashboardRecurring(w http.ResponseWriter, r *http.Request) {
 	items := []RecurringItem{}
 	for rows.Next() {
 		var item RecurringItem
-		if err := rows.Scan(&item.Establishment, &item.Months, &item.Count, &item.AvgAmount, &item.Total, &item.Category, &item.Color); err != nil {
+		if err := rows.Scan(&item.Establishment, &item.Months, &item.Count, &item.AvgAmount, &item.Total, &item.Category, &item.Color, &item.AvgDay); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}

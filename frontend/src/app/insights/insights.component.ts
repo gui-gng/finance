@@ -294,8 +294,7 @@ export class InsightsComponent implements OnInit {
           });
         }
         for (const r of recurring) {
-          // crude: show recurring charges around the day of month they most often occur
-          if (r.establishment && d.getDate() === 5) {
+          if (r.avg_day && d.getDate() === r.avg_day) {
             events.push({ label: r.establishment, cls: 'recurring' });
           }
         }

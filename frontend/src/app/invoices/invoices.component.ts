@@ -69,7 +69,7 @@ const WEEKDAYS_PT = ['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom'];
       <h3>Card comparison</h3>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Holder</th><th class="num">Limit</th><th class="num">Open invoices</th><th class="num">Utilization</th></tr></thead>
+          <thead><tr><th>Holder</th><th class="num">Limit</th><th class="num">Running installments /mo</th><th class="num">Utilization</th></tr></thead>
           <tbody>
             <tr *ngFor="let h of holders">
               <td>{{ h }}</td>
@@ -452,8 +452,9 @@ export class InvoicesComponent implements OnInit {
     });
   }
 
-  buildCalendar(): void {
-    forkJoin({ invoices: this.api.invoices(), totals: this.api.invoiceTotals({}) }).subscribe(({ invoices, totals }) => {
+    buildCalendar(): void {
+    forkJoin({ invoices: this.api.invoices(), totals: this.api.invoiceTotals({}), recurring: this.api.recurring({}) })
+      .subscribe(({ invoices, totals, recurring }) => {
       const [y, m] = this.calendarMonth.split('-').map(Number);
       const first = new Date(y, m - 1, 1);
       const start = new Date(first);
@@ -472,6 +473,11 @@ export class InvoicesComponent implements OnInit {
           const total = byId.get(inv.id);
           const overdue = !inv.paid && new Date(inv.reference_date + 'T00:00:00') < today;
           events.push({ label: `Fatura ${this.fmt(total?.expenses ?? 0)}`, cls: inv.paid ? 'paid' : overdue ? 'overdue' : '' });
+        }
+        for (const r of recurring) {
+          if (r.avg_day && d.getDate() === r.avg_day) {
+            events.push({ label: r.establishment, cls: 'recurring' });
+          }
         }
         cells.push({ date: d.getDate(), iso, other: d.getMonth() !== m - 1, events });
       }
